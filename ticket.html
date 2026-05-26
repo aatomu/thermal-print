@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>Thermal Print by ESC/POS</title>
+
+  <style>
+    body {
+      width: 100vw;
+
+      margin: 0;
+
+      display: flex;
+      flex-direction: row;
+      flex-wrap: nowrap;
+      justify-content: center;
+      align-items: flex-start;
+    }
+
+    .buttons {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: nowrap;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .configs {
+      display: flex;
+      flex-direction: column;
+      flex-wrap: nowrap;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .configs * {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: nowrap;
+      align-items: center;
+    }
+
+    .inputs {
+      display: flex;
+      flex-direction: column;
+      flex-wrap: nowrap;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .ui-input {
+      height: 30lh;
+      width: 50ch;
+      resize: none;
+
+      overflow: scroll;
+      text-wrap: no-wrap;
+      white-space: pre;
+    }
+
+    .preview-area {
+      height: 480px;
+      width: 720px;
+
+      border-color: black;
+      border-style: solid;
+      border-width: 3px;
+    }
+
+    .preview-area *:hover {
+      animation: clock 0.5s ease infinite;
+    }
+
+    @keyframes clock {
+      50% {
+        box-shadow: 0px 0px 0px 2px rgba(0, 0, 0, 1);
+      }
+    }
+
+    .preview-print {
+      border-color: lightgrey;
+      border-width: 3px;
+      border-style: solid;
+    }
+  </style>
+</head>
+
+<body>
+  <div>
+    <!-- Utilities -->
+    <div class="buttons">
+      <button id="connect">Connect<br>to<br>Printer</button>
+      <button id="convert">Convert<br>to<br>Canvas</button>
+      <button id="dithering">Canvas<br>Dithering</button>
+      <button id="thermal-print">Thermal<br>Print</button>
+    </div>
+
+    <!-- Config -->
+    <div class="configs">
+      <span>Paper Width : <input type="range" id="paper-width" min="32" max="512" step="16" value="384"><span id="paper-width-value"></span></span>
+      <select id="print-quality">
+        <option value="0">8dot single-density</option>
+        <option value="1">8dot double-density</option>
+        <option value="32">24dot single-density</option>
+        <option value="33" selected>24dot double-density</option>
+      </select>
+      <span>Black Threshold: <input type="range" id="black-threshold" min="0" max="256" step="16" value="128"></label><span id="black-threshold-value"></span></span>
+    </div>
+  </div>
+
+  <!-- User input -->
+  <div class="inputs">
+    <!-- <div class="inputs"> -->
+    <textarea class="ui-input" placeholder="Main SVG" id="input-svg"><text x="50" y="10" style="transform: translate(27px, 25px);">Hello world!</text></textarea>
+    <button onclick="this.children[0].click()"><input type="file" id="input-file" accept="image/*" style="display: none;">Upload image</button>
+  </div>
+
+
+  <!-- Preview -->
+  <div class="preview">
+    <svg xmlns="http://www.w3.org/2000/svg" class="preview-area" id="preview-raw" style="filter: grayscale(100%);user-select: none;">
+    </svg>
+    <canvas class="preview-print" id="preview-print"></canvas>
+  </div>
+</body>
+
+<script src="./escpos.js"></script>
+
+<!-- HTML preview control -->
+<script>
+  // @ts-check
+  /** @type {HTMLInputElement} */
+  // @ts-expect-error
+  const paperWidth = document.getElementById("paper-width")
+  /** @type {HTMLSpanElement} */
+  // @ts-expect-error
+  const paperWidthValue = document.getElementById("paper-width-value")
+  /** @type {HTMLSelectElement} */
+  // @ts-expect-error
+  const printQuality = document.getElementById("print-quality")
+  /** @type {HTMLInputElement} */
+  // @ts-expect-error
+  const blackThreshold = document.getElementById("black-threshold")
+  /** @type {HTMLSpanElement} */
+  // @ts-expect-error
+  const blackThresholdValue = document.getElementById("black-threshold-value")
+
+  /** @type {HTMLInputElement} */
+  // @ts-expect-error
+  const inputFile = document.getElementById("input-file")
+  /** @type {HTMLTextAreaElement} */
+  // @ts-expect-error
+  const inputSVG = document.getElementById("input-svg")
+
+  /** @type {SVGElement} */
+  // @ts-expect-error
+  const previewRaw = document.getElementById("preview-raw")
+  /** @type {HTMLCanvasElement} */
+  // @ts-expect-error
+  const previewPrint = document.getElementById("preview-print")
+
+  /** @type {HTMLButtonElement} */
+  // @ts-expect-error
+  const connect = document.getElementById("connect")
+  /** @type {HTMLButtonElement} */
+  // @ts-expect-error
+  const convert = document.getElementById("convert")
+  /** @type {HTMLButtonElement} */
+  // @ts-expect-error
+  const dithering = document.getElementById("dithering")
+  /** @type {HTMLButtonElement} */
+  // @ts-expect-error
+  const thermalPrint = document.getElementById("thermal-print")
+
+  /** @type {ThermalPrinter|null} */
+  let printer = null
+
+  // Config
+  function updateHeight() {
+    let height = -Infinity
+    for (const child of previewRaw.children) {
+      /** @type {SVGElement}*/
+      const element = child
+      height = Math.max(height, element.getBoundingClientRect().bottom)
+    }
+    height = height - previewRaw.getBoundingClientRect().top + 20
+
+    previewRaw.style.height = `${height}px`
+    previewRaw.setAttribute("height", height.toString())
+    previewPrint.style.height = `${height}px`
+  }
+  paperWidth.addEventListener("change", () => {
+    const width = Number(paperWidth.value) / 2
+
+    previewRaw.style.width = `${width}px`
+    previewRaw.setAttribute("width", width.toString())
+
+    previewPrint.style.width = `${width}px`
+
+    paperWidthValue.innerText = (width * 2).toString().padStart(3, "0")
+  })
+  paperWidth.dispatchEvent(new Event("change"))
+  blackThreshold.addEventListener("change", () => {
+    const threshold = Number(blackThreshold.value)
+    blackThresholdValue.innerText = threshold.toString().padStart(3, "0")
+  })
+  blackThreshold.dispatchEvent(new Event("change"))
+
+  // Preview
+  inputFile.addEventListener("change", (event) => {
+    const files = inputFile.files
+    if (!files) return
+    const file = files[0]
+
+    const reader = new FileReader()
+    reader.addEventListener("load", () => {
+      const image = document.createElementNS("http://www.w3.org/2000/svg", "image")
+      /** @type {string|null} */
+      // @ts-expect-error
+      const base64 = reader.result
+      if (!base64) return
+      image.setAttributeNS(null, "href", base64)
+      image.setAttributeNS(null, "x", "0")
+      image.setAttributeNS(null, "y", "10")
+      image.setAttributeNS(null, "height", "10")
+
+      inputSVG.value += image.outerHTML
+      inputSVG.dispatchEvent(new Event("input"))
+    })
+    reader.readAsDataURL(file)
+  })
+
+  let clickStart = { x: 0, y: 0 }
+  let offset = { x: 0, y: 0 }
+  inputSVG.addEventListener("input", () => {
+    previewRaw.innerHTML = inputSVG.value
+    updateHeight()
+
+    for (const child of previewRaw.children) {
+      /** @type {HTMLElement}*/
+      // @ts-expect-error
+      const element = child
+      console.log(element)
+      element.addEventListener("mousedown", (event) => {
+        console.log(element, "down")
+        element.setAttribute("target", "true")
+
+        const transform = element.style.transform
+        const match = transform ? transform.match(/\d+/g) : null
+
+        offset.x = match ? Number(match[0]) : 0
+        offset.y = match ? Number(match[1]) : 0
+        clickStart.x = event.clientX
+        clickStart.y = event.clientY
+      })
+
+      element.addEventListener("mousemove", (event) => {
+        if (!element.hasAttribute("target")) return
+
+        const shiftX = event.clientX - clickStart.x
+        const shiftY = event.clientY - clickStart.y
+
+        element.style.transform = `translate(${offset.x + shiftX}px,${offset.y + shiftY}px)`
+        updateHeight()
+      })
+
+      element.addEventListener("mouseup", (event) => {
+        if (!element.hasAttribute("target")) return
+
+        element.removeAttribute("target")
+        console.log(element, "up")
+
+        inputSVG.value = previewRaw.innerHTML
+      })
+      element.addEventListener("mouseleave", (event) => {
+        if (!element.hasAttribute("target")) return
+
+        element.removeAttribute("target")
+        console.log(event.target, "leave")
+
+        inputSVG.value = previewRaw.innerHTML
+      })
+    }
+  })
+  inputSVG.dispatchEvent(new Event("input"))
+
+  function svg2canvas() {
+    const svgBlob = new Blob([previewRaw.outerHTML], { type: 'image/svg+xml' });
+    const image = new Image();
+    const url = URL.createObjectURL(svgBlob);
+
+    image.addEventListener("load", () => {
+      // Canvas quality zoom
+      let widthMultiplier = 1;
+      let heightMultiplier = 1;
+      if (printQuality.value == "1" || printQuality.value == "33") {
+        widthMultiplier = 2;
+      }
+      if (printQuality.value == "32" || printQuality.value == "33") {
+        heightMultiplier = 3;
+      }
+
+      const width = Number(previewRaw.getAttribute("width")) * widthMultiplier;
+      const height = Number(previewRaw.getAttribute("height")) * heightMultiplier;
+
+      previewPrint.width = width;
+      previewPrint.height = height;
+
+      /** @type {CanvasRenderingContext2D} */
+      // @ts-expect-error
+      const ctx = previewPrint.getContext("2d");
+      ctx.imageSmoothingEnabled = false;
+
+      // Fill white
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, width, height);
+
+      // Paste image
+      ctx.drawImage(image, 0, 0, width, height);
+
+      URL.revokeObjectURL(url);
+    });
+
+    image.addEventListener("error", (e) => {
+      console.log(e);
+      console.log("Blob URL:", url);
+      console.log("SVG text:", previewRaw.outerHTML);
+      window.open(url, '_blank');
+    });
+
+    image.src = url;
+  }
+
+
+  // Interaction 
+  connect.addEventListener("click", async () => {
+    printer = new ThermalPrinter()
+    await printer.connect()
+  })
+
+
+  convert.addEventListener("click", svg2canvas)
+
+  dithering.addEventListener("click", () => {
+    /** @type {CanvasRenderingContext2D}*/
+    // @ts-expect-error
+    const ctx = previewPrint.getContext("2d")
+    const height = previewPrint.height
+    const width = previewPrint.width
+    const threshold = parseInt(blackThreshold.value, 10)
+
+    // canvas to 2d mapped
+    const gray = []
+    const image = ctx.getImageData(0, 0, width, height)
+    for (let y = 0; y < height; y++) {
+      const row = []
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4
+        const r = image.data[i]
+        const g = image.data[i + 1]
+        const b = image.data[i + 2]
+        const grayValue = 0.299 * r + 0.587 * g + 0.114 * b
+        row.push(grayValue)
+      }
+      gray.push(row)
+    }
+
+    function clamp(n) {
+      return Math.max(Math.min(n, 255), 0)
+    }
+
+    // Floyd–Steinberg dithering & write pixel
+    for (let y = 0; y < height; y++) {
+      const isEven = y % 2 === 0
+      const xStart = isEven ? 0 : width - 1
+      const xEnd = isEven ? width : -1
+      const xStep = isEven ? 1 : -1
+
+      for (let x = xStart; x !== xEnd; x += xStep) {
+        const oldPixel = gray[y][x]
+        const newPixel = oldPixel > threshold ? 255 : 0
+        const diff = oldPixel - newPixel
+        const index = (y * width + x) * 4
+        image.data[index + 0] = newPixel
+        image.data[index + 1] = newPixel
+        image.data[index + 2] = newPixel
+        image.data[index + 3] = 0xff
+
+        if (x + 1 < width) {
+          gray[y][x + 1] = clamp(gray[y][x + 1] + (diff * (7 / 16)))
+        }
+        if (x - 1 >= 0 && y + 1 < height) {
+          gray[y + 1][x - 1] = clamp(gray[y + 1][x - 1] + (diff * (3 / 16)))
+        }
+        if (y + 1 < height) {
+          gray[y + 1][x] = clamp(gray[y + 1][x] + (diff * (5 / 16)))
+        }
+        if (x + 1 < width && y + 1 < height) {
+          gray[y + 1][x + 1] = clamp(gray[y + 1][x + 1] + (diff * (1 / 16)))
+        }
+      }
+    }
+    ctx.putImageData(image, 0, 0)
+  })
+
+  thermalPrint.addEventListener("click", () => {
+    if (!printer) {
+      alert("Printer not connected!!")
+      return
+    }
+    const width = previewPrint.width
+    const height = Math.floor(previewPrint.height * (25 / 38))
+
+    const scaleCanvas = document.createElement("canvas")
+    scaleCanvas.width = width
+    scaleCanvas.height = height
+    /** @type {CanvasRenderingContext2D}*/
+    // @ts-expect-error
+    const scaleCtx = scaleCanvas.getContext("2d")
+    scaleCtx.imageSmoothingEnabled = false
+    scaleCtx.drawImage(previewPrint, 0, 0, width, height)
+
+    const quality = parseInt(printQuality.value, 10)
+    let byte = 1
+    if (quality == 32 || quality == 33) {
+      byte = 3
+    }
+    const yStep = 8 * byte
+
+    const image = scaleCtx.getImageData(0, 0, width, height)
+    for (let y = 0; y < height; y += yStep) {
+      const binary = []
+      for (let x = 0; x < width; x++) {
+        for (let b = 0; b < byte; b++) {
+          let column = 0
+          for (let offset = 0; offset < 8; offset++) {
+            column = column << 1
+            if (y + b * 8 + offset > height) continue
+
+            const index = ((y + b * 8 + offset) * width + x) * 4
+            if (image.data[index] == 0) {
+              column |= 1
+            }
+          }
+          binary.push(column)
+        }
+      }
+      console.log(binary)
+
+      printer.BitImage_Print(quality, width, binary)
+      printer.send()
+    }
+  })
+</script>
+
+</html>
